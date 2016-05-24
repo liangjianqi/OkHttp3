@@ -36,8 +36,6 @@ public class MainActivity extends AppCompatActivity {
         OkHttpClient client = new OkHttpClient();
         Request request = new Request.Builder()
                 .url("https://api.github.com/repos/square/okhttp/issues")
-
-
                 .build();
 
         client.newCall(request).enqueue(new Callback() {
