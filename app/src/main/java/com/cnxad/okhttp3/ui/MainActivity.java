@@ -33,20 +33,23 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void asyncGet(View view) {
-        OkHttpClient client = new OkHttpClient();
+        OkHttpClient client = new OkHttpClient.Builder().build();
         Request request = new Request.Builder()
-                .url("https://api.github.com/repos/square/okhttp/issues")
+                .url("https://raw.githubusercontent.com/square/okhttp/master/README.md")
+                .get()
                 .build();
 
         client.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                Log.e(TAG, e.getMessage());
+                Log.e(TAG,e.getMessage());
             }
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
-                Log.e(TAG, response.body().toString());
+                if(response.isSuccessful()){
+                    Log.e(TAG,response.body().string());
+                }
             }
         });
     }
