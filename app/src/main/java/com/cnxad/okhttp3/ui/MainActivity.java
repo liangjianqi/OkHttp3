@@ -36,7 +36,6 @@ public class MainActivity extends AppCompatActivity {
         OkHttpClient client = new OkHttpClient.Builder().build();
         Request request = new Request.Builder()
                 .url("https://raw.githubusercontent.com/square/okhttp/master/README.md")
-                .get()
                 .build();
 
         client.newCall(request).enqueue(new Callback() {
