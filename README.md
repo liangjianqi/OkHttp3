@@ -144,11 +144,17 @@ AsyncCall本质是实现了Runnable接口，内部实现了execute方法
 
 
 
-# 详细设计 #
-## 类关系图 ##
+# 核心入口介绍 #
+## OkHttpClient ##
 
+## 拦截器Interceptor ##
 
-## 核心功能介绍 ##
+## 缓存策略Cache ##
+
+## 连接池 ##
+
+## 平台适应性Platform ##
+
 
 # 拓展 #
 
