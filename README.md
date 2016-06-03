@@ -18,6 +18,7 @@
 SPDY允许多个并发HTTP请求共用一个TCP会话，通过复用在单个TCP连接上的多次请求，而非为每个请求单独开放连接，这样只需建立一个TCP连接就可以传送网页上所有资源，不仅可以减少消息交互往返的时间还可以避免创建新连接造成的延迟，使得 TCP 的效率更高。
 
 # 总体设计 #
+
 ## 总体设计图 ##
 ![](http://i.imgur.com/3AQhOcL.png)
 
@@ -148,14 +149,150 @@ AsyncCall本质是实现了Runnable接口，内部实现了execute方法
 ## OkHttpClient ##
 
 ## 拦截器Interceptor ##
+定义：观察，修改以及可能短路的请求输出和响应请求的回来。通常情况下拦截器用来添加，移除或者转换请求或者回应的头部信息。拦截器接口中有intercept(Chain chain)方法，同时返回Response。主要是针对Request和Response的处理。
+
+    public final class LoggingInterceptors {
+      private static final Logger logger = Logger.getLogger(LoggingInterceptors.class.getName());
+      private final OkHttpClient client = new OkHttpClient.Builder()
+	      .addInterceptor(new LoggingInterceptor())
+	      .build();
+    
+      public void run() throws Exception {
+		  Request request = new Request.Builder()
+		  .url("https://publicobject.com/helloworld.txt")
+		  .build();
+	    
+	      Response response = client.newCall(request).execute();
+	      response.body().close();
+      }
+    
+      private static class LoggingInterceptor implements Interceptor {
+	    @Override public Response intercept(Chain chain) throws IOException {
+		      long t1 = System.nanoTime();
+		      Request request = chain.request();
+		      logger.info(String.format("Sending request %s on %s%n%s",
+		      request.url(), chain.connection(), request.headers()));
+		      Response response = chain.proceed(request);
+		    
+		      long t2 = System.nanoTime();
+		      logger.info(String.format("Received response for %s in %.1fms%n%s",
+		      request.url(), (t2 - t1) / 1e6d, response.headers()));
+		      return response;
+	    }
+      }
+    
+      public static void main(String... args) throws Exception {
+    	new LoggingInterceptors().run();
+      }
+    }
 
 ## 缓存策略Cache ##
+    
+    public final class CacheResponse {
+      private final OkHttpClient client;
+    
+      public CacheResponse(File cacheDirectory) throws Exception {
+	    int cacheSize = 10 * 1024 * 1024; // 10 MiB
+	    Cache cache = new Cache(cacheDirectory, cacheSize);
+	    
+	    client = new OkHttpClient.Builder()
+	    .cache(cache)
+	    .build();
+      }
+    
+      public void run() throws Exception {
+	    Request request = new Request.Builder()
+	    .url("http://publicobject.com/helloworld.txt")
+	    .build();
+	    
+	    String response1Body;
+	    try (Response response1 = client.newCall(request).execute()) {
+	      if (!response1.isSuccessful()) throw new IOException("Unexpected code " + response1);
+	    
+	      response1Body = response1.body().string();
+	      System.out.println("Response 1 response:  " + response1);
+	      System.out.println("Response 1 cache response:" + response1.cacheResponse());
+	      System.out.println("Response 1 network response:  " + response1.networkResponse());
+	    }
+    
+	    String response2Body;
+	    try (Response response2 = client.newCall(request).execute()) {
+	      if (!response2.isSuccessful()) throw new IOException("Unexpected code " + response2);
+	    
+	      response2Body = response2.body().string();
+	      System.out.println("Response 2 response:  " + response2);
+	      System.out.println("Response 2 cache response:" + response2.cacheResponse());
+	      System.out.println("Response 2 network response:  " + response2.networkResponse());
+	    }
+	    
+	    System.out.println("Response 2 equals Response 1? " + response1Body.equals(response2Body));}
+	    
+	      public static void main(String... args) throws Exception {
+	    	new CacheResponse(new File("CacheResponse.tmp")).run();
+	      }
+    }
+        
+### sendRequest() ###
+此方法是对可能的Response资源进行一个预判，如果需要就会开启一个socket来获取资源。如果请求存在那么就会为当前request添加请求头部并且准备开始写入request body。
+
+### readResponse() ###
+此方法发起刷新请求头部和请求体，解析HTTP回应头部，并且如果HTTP回应体存在的话就开始读取当前回应头。在这里有发起返回存入缓存系统，也有返回和缓存系统进行一个对比的过程。
+
 
 ## 连接池 ##
 
 ## 平台适应性Platform ##
-
-
+Platform是整个平台适应的核心类。同时它封装了针对不同平台的平台类Android和JdkWithJettyBootPlatform。这里采用了JAVA的反射原理调用到class的method。最后在各自的平台调用下发起invoke来执行相应方法。  
+    
+    /** Attempt to match the host runtime to a capable Platform implementation. */
+    private static Platform findPlatform() {
+    	// Attempt to find Android 2.3+ APIs.
+    	try {
+    	  Class<?> sslParametersClass;
+    	  try {
+    		sslParametersClass = Class.forName("com.android.org.conscrypt.SSLParametersImpl");
+    	  } catch (ClassNotFoundException e) {
+    		// Older platform before being unbundled.
+    		sslParametersClass = Class.forName("org.apache.harmony.xnet.provider.jsse.SSLParametersImpl");
+      	}
+    
+    	  OptionalMethod<Socket> setUseSessionTickets = new OptionalMethod<>(null, "setUseSessionTickets", boolean.class);
+    	  OptionalMethod<Socket> setHostname = new OptionalMethod<>(null, "setHostname", String.class);
+    	  OptionalMethod<Socket> getAlpnSelectedProtocol = null;
+    	  OptionalMethod<Socket> setAlpnProtocols = null;
+    	
+    	  // Attempt to find Android 5.0+ APIs.
+    	  try {
+    		Class.forName("android.net.Network"); // Arbitrary class added in Android 5.0.
+    		getAlpnSelectedProtocol = new OptionalMethod<>(byte[].class, "getAlpnSelectedProtocol");
+    		setAlpnProtocols = new OptionalMethod<>(null, "setAlpnProtocols", byte[].class);
+    	  } catch (ClassNotFoundException ignored) {
+    	  }
+    	
+    	  return new Android(sslParametersClass, setUseSessionTickets, setHostname,
+    	  getAlpnSelectedProtocol, setAlpnProtocols);
+    	} catch (ClassNotFoundException ignored) {
+    	  // This isn't an Android runtime.
+    	}
+    
+    	// Find Jetty's ALPN extension for OpenJDK.
+    	try {
+    		  String negoClassName = "org.eclipse.jetty.alpn.ALPN";
+    		  Class<?> negoClass = Class.forName(negoClassName);
+    		  Class<?> providerClass = Class.forName(negoClassName + "$Provider");
+    		  Class<?> clientProviderClass = Class.forName(negoClassName + "$ClientProvider");
+    		  Class<?> serverProviderClass = Class.forName(negoClassName + "$ServerProvider");
+    		  Method putMethod = negoClass.getMethod("put", SSLSocket.class, providerClass);
+    		  Method getMethod = negoClass.getMethod("get", SSLSocket.class);
+    		  Method removeMethod = negoClass.getMethod("remove", SSLSocket.class);
+    		  return new JdkWithJettyBootPlatform(
+    		  putMethod, getMethod, removeMethod, clientProviderClass, serverProviderClass);
+    		} catch (ClassNotFoundException | NoSuchMethodException ignored) {
+    		}
+    	
+    		// Probably an Oracle JDK like OpenJDK.
+    		return new Platform();
+    }
 # 拓展 #
 
 
